@@ -5,21 +5,21 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Taiyu · Pedidos</title>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#f6f5ed;color:#193c30;font:16px system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:#1E293B;color:#1E3A8A;font:16px system-ui,sans-serif}
 header,main{max-width:1100px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center}
-h1{margin:0;font-size:32px}h2{font-size:22px}button,input,select{font:inherit}button{padding:11px 18px;border:1px solid #285140;border-radius:7px;background:#285140;color:white;cursor:pointer}
-button:disabled{opacity:.5;cursor:wait}.secondary{background:white;color:#285140}input,select{width:100%;padding:11px;border:1px solid #bcc8bf;border-radius:6px;background:white;color:#193c30}
+h1{margin:0;font-size:32px}h2{font-size:22px}button,input,select{font:inherit}button{padding:11px 18px;border:1px solid #2563EB;border-radius:7px;background:#2563EB;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}.secondary{background:white;color:#2563EB}input,select{width:100%;padding:11px;border:1px solid #94A3BB;border-radius:6px;background:white;color:#1E3A8A}
 label{display:block;margin:12px 0}label span{display:block;margin-bottom:6px}input[type=checkbox]{width:auto}
-section,article{background:white;border:1px solid #d4ddd5;border-radius:10px;padding:20px;margin-bottom:18px}
+section,article{background:white;border:1px solid #94A3BB;border-radius:10px;padding:20px;margin-bottom:18px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}
-nav{display:flex;gap:10px;margin-bottom:22px}#message{white-space:pre-wrap;padding:0 24px;max-width:1100px;margin:0 auto;color:#803458}
+nav{display:flex;gap:10px;margin-bottom:22px}#message{white-space:pre-wrap;padding:0 24px;max-width:1100px;margin:0 auto;color:#1E3A8A}
 #suggestions button{display:block;width:100%;text-align:left;margin-bottom:4px}output{display:block;font-weight:bold;margin:16px 0}
-small{color:#53675a}.date{font-weight:bold;font-size:21px}.badge{color:#803458}fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}
+small{color:#475569}.date{font-weight:bold;font-size:21px}.badge{color:#1E3A8A}fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}
 
 body:has(#queueSection:not([hidden])) main{max-width:1800px}
 #queue{display:grid;grid-template-columns:repeat(4,minmax(260px,1fr));gap:16px;overflow-x:auto;align-items:start;padding-bottom:16px}
 #queue.with-delivered{grid-template-columns:repeat(5,minmax(260px,1fr))}
-.stage-column{min-width:0;border-top:4px solid var(--stage-color);background:#f2f4ef;border-radius:8px;padding:12px}
+.stage-column{min-width:0;border-top:4px solid var(--stage-color);background:#eef2f8;border-radius:8px;padding:12px}
 .stage-column h3.stage-heading{display:flex;justify-content:space-between;align-items:center;margin:0 0 14px;font-size:18px}
 .stage-count{background:white;border-radius:20px;padding:3px 10px;font-size:14px}
 .stage-column article{padding:16px;margin:0 0 12px;overflow-wrap:anywhere}
@@ -27,7 +27,17 @@ body:has(#queueSection:not([hidden])) main{max-width:1800px}
 .stage-column article .date{font-size:18px}
 .stage-column article button{width:100%;margin-top:10px}
 .stage-column article form{margin-top:14px}
-.stage-empty{color:#69776e;font-size:14px}
+.stage-empty{color:#475569;font-size:14px}
+
+header{background:white;border-bottom:4px solid #10B981;border-radius:0 0 12px 12px}
+nav{flex-wrap:wrap}nav .secondary{background:white}
+#message{color:#ffffff}#message:empty{display:none}
+small,.stage-column article small{color:#475569}
+button:hover{background:#1E3A8A;color:white}
+input:focus,select:focus,button:focus-visible{outline:3px solid #10B981;outline-offset:2px}
+input[type=checkbox]{accent-color:#2563EB}
+.stage-count{color:#475569}.stage-column article{border-color:#94A3BB}
+#total{color:#1E3A8A}
 </style>
 </head>
 <body>
@@ -146,11 +156,11 @@ async function refreshQueue() {
     el('queue').replaceChildren();
     el('queue').classList.toggle('with-delivered', el('showDelivered').checked);
     const stages = [
-      ['Ingreso', '#647a70'],
-      ['Aprobación', '#864368'],
-      ['Producción', '#47779b'],
-      ['Completado', '#aa8035'],
-      ['Entregado', '#357755']
+      ['Ingreso', '#94A3BB'],
+      ['Aprobación', '#1E3A8A'],
+      ['Producción', '#2563EB'],
+      ['Completado', '#475569'],
+      ['Entregado', '#10B981']
     ].filter(([stage]) => el('showDelivered').checked || stage !== 'Entregado');
     const columns = new Map();
     for (const [stage, color] of stages) {
