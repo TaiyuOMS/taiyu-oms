@@ -51,7 +51,7 @@ small{color:#53675a}.date{font-weight:bold;font-size:21px}.badge{color:#803458}f
 </section>
 <section id="queueSection" hidden>
 <h2>Cola de trabajo</h2><button id="refresh" class="secondary">Actualizar</button>
-<p id="queueStatus"></p><div id="queue" class="cards"></div>
+<label><input id="showDelivered" type="checkbox"> Mostrar entregadas</label><p id="queueStatus"></p><div id="queue" class="cards"></div>
 </section>
 </div>
 </main>
@@ -114,7 +114,16 @@ function showQueue() {
 async function refreshQueue() {
   el('queueStatus').textContent = 'Cargando…';
   try {
-    const rows = await rpc('cola');
+    let rows;
+    let enabled = true;
+    try { rows = await rpc('seguimiento'); }
+    catch (error) {
+      if (error.code !== 'PGRST202') throw error;
+      rows = await rpc('cola');
+      enabled = false;
+      message('Para habilitar las etapas ejecutá la migración 002 en Supabase.');
+    }
+    rows = rows.filter(row => el('showDelivered').checked || row.etapa !== 'Entregado');
     el('queue').replaceChildren();
     for (const row of rows) {
       const card = document.createElement('article');
@@ -128,6 +137,7 @@ async function refreshQueue() {
         item.className = className;
         card.append(item);
       }
+      if (enabled) addActions(card, row);
       el('queue').append(card);
     }
     el('queueStatus').textContent = rows.length ? rows.length + ' subórdenes' : 'Sin pedidos pendientes.';
@@ -136,6 +146,87 @@ async function refreshQueue() {
     message(error.message);
   }
 }
+
+function addActions(card, row) {
+  const progress = document.createElement('p');
+  progress.textContent = 'Entregadas ' + row.entregadas + ' de ' + row.cantidad;
+  card.append(progress);
+  const form = document.createElement('form');
+  let checkbox;
+  let quantity;
+  const next = {Ingreso:'Aprobación','Aprobación':'Producción','Producción':'Completado'};
+  if (row.etapa === 'Aprobación') {
+    const label = document.createElement('label');
+    checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.required = true;
+    label.append(checkbox, ' Confirmo la aprobación del cliente');
+    form.append(label);
+  }
+  if (row.etapa === 'Completado') {
+    const label = document.createElement('label');
+    label.textContent = 'Unidades a entregar';
+    quantity = document.createElement('input');
+    quantity.type = 'number';
+    quantity.min = 1;
+    quantity.step = 1;
+    quantity.max = row.cantidad - row.entregadas;
+    quantity.value = quantity.max;
+    quantity.required = true;
+    label.append(quantity);
+    form.append(label);
+  }
+  if (row.etapa !== 'Entregado') {
+    const button = document.createElement('button');
+    button.textContent = quantity ? 'Registrar entrega' : 'Pasar a ' + next[row.etapa];
+    form.append(button);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      if (!confirm('¿Confirmar este movimiento para ' + row.suborden + '?')) return;
+      button.disabled = true;
+      try {
+        await rpc('avanzar', {
+          codigo:row.suborden,version_actual:row.version,
+          siguiente:quantity ? 'Entrega' : next[row.etapa],
+          aprobado:Boolean(checkbox && checkbox.checked),
+          unidades:quantity ? Number(quantity.value) : 0
+        });
+        message('Movimiento registrado para ' + row.suborden);
+        await refreshQueue();
+      } catch (error) {
+        message(error.message + ' Actualizá la cola antes de reintentar.');
+        await refreshQueue();
+      }
+    };
+    card.append(form);
+  }
+  const historyButton = document.createElement('button');
+  historyButton.type = 'button';
+  historyButton.className = 'secondary';
+  historyButton.textContent = 'Ver historial';
+  const history = document.createElement('div');
+  historyButton.onclick = async () => {
+    historyButton.disabled = true;
+    try {
+      const movements = await rpc('historial', {codigo:row.suborden});
+      history.replaceChildren();
+      for (const movement of movements) {
+        const details = document.createElement('details');
+        const summary = document.createElement('summary');
+        summary.textContent = new Date(movement.fecha).toLocaleString('es-CR') + ' · ' + movement.nombre + ' · ' + movement.telefono + ' · ' + movement.accion;
+        const values = document.createElement('pre');
+        values.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px';
+        values.textContent = JSON.stringify({anterior:movement.anterior,nuevo:movement.nuevo},null,2);
+        details.append(summary,values);
+        history.append(details);
+      }
+    } catch(error) { message(error.message); }
+    finally { historyButton.disabled = false; }
+  };
+  card.append(historyButton,history);
+}
+el('showDelivered').onchange = refreshQueue;
+
 function lockPending(locked) {
   el('fields').disabled = locked;
   el('retry').hidden = !locked;
