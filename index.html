@@ -38,6 +38,11 @@ input:focus,select:focus,button:focus-visible{outline:3px solid #10B981;outline-
 input[type=checkbox]{accent-color:#2563EB}
 .stage-count{color:#475569}.stage-column article{border-color:#94A3BB}
 #total{color:#1E3A8A}
+
+.stage-column{background:color-mix(in srgb,var(--stage-color) 9%,white)}
+.stage-heading{color:var(--stage-color)}
+.stage-count{background:var(--stage-color);color:white}
+.stage-column article{border-left:4px solid var(--stage-color)}
 </style>
 </head>
 <body>
@@ -156,11 +161,11 @@ async function refreshQueue() {
     el('queue').replaceChildren();
     el('queue').classList.toggle('with-delivered', el('showDelivered').checked);
     const stages = [
-      ['Ingreso', '#94A3BB'],
-      ['Aprobación', '#1E3A8A'],
-      ['Producción', '#2563EB'],
-      ['Completado', '#475569'],
-      ['Entregado', '#10B981']
+      ['Ingreso', '#2563EB'],
+      ['Aprobación', '#DC2626'],
+      ['Producción', '#EA580C'],
+      ['Completado', '#16A34A'],
+      ['Entregado', '#475569']
     ].filter(([stage]) => el('showDelivered').checked || stage !== 'Entregado');
     const columns = new Map();
     for (const [stage, color] of stages) {
