@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Taiyu · Pedidos</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f6f5ed;color:#193c30;font:16px system-ui,sans-serif}
+header,main{max-width:1100px;margin:auto;padding:24px}header{display:flex;justify-content:space-between;align-items:center}
+h1{margin:0;font-size:32px}h2{font-size:22px}button,input,select{font:inherit}button{padding:11px 18px;border:1px solid #285140;border-radius:7px;background:#285140;color:white;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}.secondary{background:white;color:#285140}input,select{width:100%;padding:11px;border:1px solid #bcc8bf;border-radius:6px;background:white;color:#193c30}
+label{display:block;margin:12px 0}label span{display:block;margin-bottom:6px}input[type=checkbox]{width:auto}
+section,article{background:white;border:1px solid #d4ddd5;border-radius:10px;padding:20px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px}
+nav{display:flex;gap:10px;margin-bottom:22px}#message{white-space:pre-wrap;padding:0 24px;max-width:1100px;margin:0 auto;color:#803458}
+#suggestions button{display:block;width:100%;text-align:left;margin-bottom:4px}output{display:block;font-weight:bold;margin:16px 0}
+small{color:#53675a}.date{font-weight:bold;font-size:21px}.badge{color:#803458}fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<header><div><h1>taiyu</h1><small>Gestión de pedidos</small></div><button id="logout" class="secondary" hidden>Salir</button></header>
+<p id="message" role="status"></p>
+<main>
+<section id="access">
+<h2>Ingresar</h2>
+<form id="login">
+<label><span>Correo de tu cuenta de Taiyu</span><input name="email" type="email" autocomplete="username" required></label>
+<label><span>Contraseña</span><input name="password" type="password" autocomplete="current-password" required></label>
+<button>Ingresar</button>
+</form>
+</section>
+<div id="workspace" hidden>
+<nav><button id="showNew">Nuevo pedido</button><button id="showQueue" class="secondary">Cola de trabajo</button></nav>
+<section id="newOrder">
+<h2>Nuevo pedido</h2>
+<form id="order">
+<fieldset id="fields">
+<div class="grid">
+<label><span>Cliente</span><input id="customer" autocomplete="off" required><div id="suggestions"></div></label>
+<label><span>Teléfono</span><input id="phone" type="tel" required></label>
+</div>
+<div id="lines"></div>
+<button type="button" id="add" class="secondary">Agregar producto</button>
+<output id="total">Total ₡0</output>
+<label><input id="deposit" type="checkbox"> Solicitar adelanto</label>
+<label id="amountLabel" hidden><span>Adelanto acordado ₡</span><input id="amount" type="number" min="0" step=".01"></label>
+<button id="save">Agregar pedido</button>
+</fieldset>
+</form>
+<button id="retry" hidden>Reintentar pedido pendiente</button>
+</section>
+<section id="queueSection" hidden>
+<h2>Cola de trabajo</h2><button id="refresh" class="secondary">Actualizar</button>
+<p id="queueStatus"></p><div id="queue" class="cards"></div>
+</section>
+</div>
+</main>
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+const db = createClient('https://rybfgojsiszrkuhgicpv.supabase.co', 'sb_publishable_ebG5ZqZjqmUinImTz5RiXw_zB3b685P');
+const el = id => document.getElementById(id);
+const money = value => new Intl.NumberFormat('es-CR', {style:'currency',currency:'CRC'}).format(value);
+let catalog = [];
+let clientId = null;
+let searchVersion = 0;
+let searchTimer;
+let pendingKey;
+let saving = false;
+let manualDeposit = false;
+
+function message(text) { el('message').textContent = text; }
+async function rpc(name, args = {}) {
+  const { data, error } = await db.rpc('taiyu_' + name, args);
+  if (error) throw error;
+  return data;
+}
+function calculate() {
+  let total = 0;
+  for (const row of el('lines').children) {
+    const quantity = row.querySelector('[name=quantity]');
+    const price = row.querySelector('[name=price]');
+    const subtotal = Number(quantity.value) * Number(price.value);
+    total += subtotal;
+    row.querySelector('output').textContent = 'Subtotal ' + money(subtotal);
+    const zero = [quantity, price].some(input => input.value !== '' && Number(input.value) === 0);
+    row.querySelector('.reason').hidden = !zero;
+    row.querySelector('[name=reason]').required = zero;
+    const shipping = row.querySelector('[name=mode]').value === 'envio';
+    row.querySelector('.address').hidden = !shipping;
+    row.querySelector('[name=address]').required = shipping;
+  }
+  el('total').textContent = 'Total ' + money(total);
+  el('amountLabel').hidden = !el('deposit').checked;
+  el('amount').required = el('deposit').checked;
+  el('amount').max = total;
+  if (!manualDeposit) el('amount').value = (total * .4).toFixed(2);
+}
+function addLine() {
+  const row = document.createElement('article');
+  row.innerHTML = '<div class="grid"><label><span>Producto</span><select name="product" required></select></label><label><span>Cantidad</span><input name="quantity" type="number" min="0" step="1" value="1" required></label><label><span>Precio unitario ₡</span><input name="price" type="number" min="0" step=".01" required></label><label><span>Fecha de entrega</span><input name="date" type="date" required></label><label><span>Modalidad</span><select name="mode"><option value="retiro">Retiro</option><option value="envio">Envío</option></select></label></div><label class="address" hidden><span>Dirección</span><input name="address"></label><label><span>Especificaciones</span><input name="notes"></label><label class="reason" hidden><span>Motivo del valor cero · Administrador</span><input name="reason"></label><output></output><button type="button" class="secondary">Quitar producto</button>';
+  const select = row.querySelector('select');
+  select.add(new Option('Seleccionar producto', ''));
+  for (const product of catalog) {
+    select.add(new Option([...product.ruta_categoria, product.producto].join(' › '), product.producto_id));
+  }
+  row.querySelector('button').onclick = () => { row.remove(); calculate(); };
+  el('lines').append(row);
+  calculate();
+}
+function showQueue() {
+  el('newOrder').hidden = true;
+  el('queueSection').hidden = false;
+}
+async function refreshQueue() {
+  el('queueStatus').textContent = 'Cargando…';
+  try {
+    const rows = await rpc('cola');
+    el('queue').replaceChildren();
+    for (const row of rows) {
+      const card = document.createElement('article');
+      for (const [tag, text, className] of [
+        ['h3',row.suborden,''],['p',row.cliente,''],['p','Entrega ' + row.fecha_entrega,'date'],
+        ['p',row.cantidad + ' × ' + row.producto,''],['p',row.etapa,'badge'],
+        ['p',money(row.subtotal),''],['small','En esta etapa desde ' + new Date(row.inicio_etapa).toLocaleString('es-CR'),'']
+      ]) {
+        const item = document.createElement(tag);
+        item.textContent = text;
+        item.className = className;
+        card.append(item);
+      }
+      el('queue').append(card);
+    }
+    el('queueStatus').textContent = rows.length ? rows.length + ' subórdenes' : 'Sin pedidos pendientes.';
+  } catch (error) {
+    el('queueStatus').textContent = 'No se pudo actualizar la cola.';
+    message(error.message);
+  }
+}
+function lockPending(locked) {
+  el('fields').disabled = locked;
+  el('retry').hidden = !locked;
+}
+async function sendPending() {
+  if (saving) return;
+  saving = true;
+  el('retry').disabled = true;
+  message('Guardando pedido…');
+  try {
+    const pending = JSON.parse(sessionStorage.getItem(pendingKey));
+    const number = await rpc('guardar_pedido', pending);
+    sessionStorage.removeItem(pendingKey);
+    lockPending(false);
+    el('order').reset();
+    clientId = null;
+    el('phone').readOnly = false;
+    manualDeposit = false;
+    searchVersion++;
+    el('suggestions').replaceChildren();
+    el('lines').replaceChildren();
+    addLine();
+    message('Pedido guardado: ' + number);
+    showQueue();
+    await refreshQueue();
+  } catch (error) {
+    // A confirmed database rejection permits correction. Network errors
+    // retain the same request ID so retrying cannot duplicate the order.
+    if (error.code && /^[0-9A-Z]{5}$/.test(error.code)) {
+      sessionStorage.removeItem(pendingKey);
+      lockPending(false);
+    }
+    message(error.message || 'Conexión interrumpida. Reintentá el pedido pendiente.');
+  } finally {
+    saving = false;
+    el('retry').disabled = false;
+  }
+}
+async function enter(session) {
+  catalog = await rpc('catalogo');
+  pendingKey = 'taiyu-pending-' + session.user.id;
+  el('access').hidden = true;
+  el('workspace').hidden = false;
+  el('logout').hidden = false;
+  el('lines').replaceChildren();
+  addLine();
+  lockPending(Boolean(sessionStorage.getItem(pendingKey)));
+  if (sessionStorage.getItem(pendingKey)) message('Hay un pedido pendiente de confirmar. Reintentá para recuperar su resultado.');
+  if (!catalog.length) message('El catálogo no tiene productos activos.');
+}
+el('login').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.target.querySelector('button');
+  button.disabled = true;
+  try {
+    const values = new FormData(event.target);
+    const {data,error} = await db.auth.signInWithPassword({email:values.get('email').trim(),password:values.get('password')});
+    if (error) throw error;
+    message('');
+    await enter(data.session);
+  } catch (error) { message(error.message); }
+  finally { button.disabled = false; }
+};
+el('customer').oninput = () => {
+  clientId = null;
+  el('phone').readOnly = false;
+  const version = ++searchVersion;
+  clearTimeout(searchTimer);
+  el('suggestions').replaceChildren();
+  const text = el('customer').value.trim();
+  if (!text) return;
+  searchTimer = setTimeout(async () => {
+    try {
+      const customers = await rpc('buscar_clientes', {texto:text});
+      if (version !== searchVersion) return;
+      for (const customer of customers) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'secondary';
+        button.textContent = customer.nombre + ' · ' + customer.telefono;
+        button.onclick = () => {
+          clientId = customer.id;
+          el('customer').value = customer.nombre;
+          el('phone').value = customer.telefono;
+          el('phone').readOnly = true;
+          el('suggestions').replaceChildren();
+          searchVersion++;
+        };
+        el('suggestions').append(button);
+      }
+    } catch (error) { if (version === searchVersion) message(error.message); }
+  }, 180);
+};
+el('order').onsubmit = event => {
+  event.preventDefault();
+  if (!el('lines').children.length) { message('Agregá al menos un producto.'); return; }
+  const lines = Array.from(el('lines').children, row => {
+    const value = name => row.querySelector('[name=' + name + ']').value;
+    return {
+      producto:Number(value('product')),cantidad:Number(value('quantity')),
+      precio:Number(value('price')),fecha_entrega:value('date'),
+      modalidad:value('mode'),direccion:value('address'),
+      especificaciones:value('notes'),motivo_cero:value('reason')
+    };
+  });
+  const pedido = {
+    cliente_id:clientId,nombre_cliente:el('customer').value.trim(),
+    telefono:el('phone').value,pedir_adelanto:el('deposit').checked,
+    adelanto_acordado:el('deposit').checked ? Number(el('amount').value) : 0,
+    lineas:lines
+  };
+  try {
+    sessionStorage.setItem(pendingKey, JSON.stringify({solicitud:crypto.randomUUID(),pedido}));
+    lockPending(true);
+    sendPending();
+  } catch (error) { message('No se pudo preparar el guardado: ' + error.message); }
+};
+el('add').onclick = addLine;
+el('lines').oninput = calculate;
+el('deposit').onchange = calculate;
+el('amount').oninput = () => { manualDeposit = true; };
+el('retry').onclick = sendPending;
+el('refresh').onclick = refreshQueue;
+el('showQueue').onclick = () => { showQueue(); refreshQueue(); };
+el('showNew').onclick = () => { el('newOrder').hidden = false; el('queueSection').hidden = true; };
+el('logout').onclick = async () => {
+  const {error} = await db.auth.signOut();
+  if (error) message(error.message);
+  else location.reload();
+};
+try {
+  const {data,error} = await db.auth.getSession();
+  if (error) throw error;
+  if (data.session) await enter(data.session);
+} catch (error) { message(error.message); }
+</script>
+</body>
+</html>
