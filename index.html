@@ -43,7 +43,7 @@ body:has(#queueSection:not([hidden])) main{max-width:1800px}
 </form>
 </section>
 <div id="workspace" hidden>
-<nav><button id="showNew">Nuevo pedido</button><button id="showQueue" class="secondary">Cola de trabajo</button></nav>
+<nav><button id="showNew">Nuevo pedido</button><button id="showQueue" class="secondary">Cola de trabajo</button><button id="showCatalog" class="secondary">Catálogo</button></nav><section id="catalogPanel" hidden><h2>Agregar producto</h2><p id="catalogMessage" role="status"></p><form id="productForm"><label><span>Categoría</span><select id="categorySelect" required></select></label><label><span>Producto</span><input id="productName" required></label><label><span>Precio unitario ₡</span><input id="productPrice" type="number" min="0" step=".01" required></label><button>Guardar producto</button></form><form id="categoryForm" hidden><h3>Nueva categoría</h3><label><span>Nombre</span><input id="categoryName" required></label><label><span>Dentro de</span><select id="categoryParent"></select></label><button>Guardar categoría</button><button type="button" id="cancelCategory" class="secondary">Cancelar</button></form></section>
 <section id="newOrder">
 <h2>Nuevo pedido</h2>
 <form id="order">
@@ -116,11 +116,17 @@ function addLine() {
   for (const product of catalog) {
     select.add(new Option([...product.ruta_categoria, product.producto].join(' › '), product.producto_id));
   }
+  select.onchange = () => {
+    const product = catalog.find(item => String(item.producto_id) === select.value);
+    row.querySelector('[name=price]').value = product?.precio_base ?? '';
+    calculate();
+  };
   row.querySelector('button').onclick = () => { row.remove(); calculate(); };
   el('lines').append(row);
   calculate();
 }
 function showQueue() {
+  el('catalogPanel').hidden = true;
   el('newOrder').hidden = true;
   el('queueSection').hidden = false;
 }
@@ -311,7 +317,7 @@ async function sendPending() {
   }
 }
 async function enter(session) {
-  catalog = await rpc('catalogo');
+  catalog = await loadCatalog();
   pendingKey = 'taiyu-pending-' + session.user.id;
   el('access').hidden = true;
   el('workspace').hidden = false;
@@ -389,6 +395,82 @@ el('order').onsubmit = event => {
     sendPending();
   } catch (error) { message('No se pudo preparar el guardado: ' + error.message); }
 };
+
+async function loadCatalog() {
+  try { return await rpc('catalogo_precios'); }
+  catch(error) {
+    if (error.code !== 'PGRST202') throw error;
+    return rpc('catalogo');
+  }
+}
+async function fillCategories(selected = '') {
+  const categories = await rpc('categorias');
+  el('categorySelect').replaceChildren(new Option('Seleccionar categoría',''));
+  el('categoryParent').replaceChildren(new Option('Categoría principal',''));
+  for (const category of categories) {
+    const name = category.ruta.join(' › ');
+    el('categorySelect').add(new Option(name,category.id));
+    el('categoryParent').add(new Option(name,category.id));
+  }
+  el('categorySelect').add(new Option('+ Agregar categoría','add'));
+  el('categorySelect').value = selected;
+}
+el('showCatalog').onclick = async () => {
+  el('newOrder').hidden = true;
+  el('queueSection').hidden = true;
+  el('catalogPanel').hidden = false;
+  el('catalogMessage').textContent = '';
+  el('productForm').querySelector('button').disabled = true;
+  try { await fillCategories(); el('productForm').querySelector('button').disabled = false; }
+  catch(error) { el('catalogMessage').textContent = error.code === 'PGRST202' ? 'Primero ejecutá la migración 003 de catálogo en Supabase.' : error.message; }
+};
+el('categorySelect').onchange = () => {
+  if (el('categorySelect').value === 'add') {
+    el('categorySelect').value = '';
+    el('categoryForm').hidden = false;
+    el('productForm').hidden = true;
+    el('categoryName').focus();
+  }
+};
+el('cancelCategory').onclick = () => {
+  el('categoryForm').hidden = true;
+  el('productForm').hidden = false;
+};
+el('categoryForm').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.target.querySelector('button');
+  button.disabled = true;
+  try {
+    const id = await rpc('crear_categoria',{nombre:el('categoryName').value.trim(),superior:el('categoryParent').value ? Number(el('categoryParent').value) : null});
+    await fillCategories(String(id));
+    el('categoryForm').reset();
+    el('categoryForm').hidden = true;
+    el('productForm').hidden = false;
+    el('catalogMessage').textContent = 'Categoría disponible.';
+  } catch(error) { el('catalogMessage').textContent = error.message; }
+  finally { button.disabled = false; }
+};
+el('productForm').onsubmit = async event => {
+  event.preventDefault();
+  const button = event.target.querySelector('button');
+  button.disabled = true;
+  try {
+    await rpc('crear_producto',{categoria:Number(el('categorySelect').value),nombre:el('productName').value.trim(),precio:Number(el('productPrice').value)});
+    el('catalogMessage').textContent = 'Producto guardado.';
+    catalog = await loadCatalog();
+    for (const row of el('lines').children) {
+      const select = row.querySelector('[name=product]');
+      const selected = select.value;
+      select.replaceChildren(new Option('Seleccionar producto',''));
+      for (const product of catalog) select.add(new Option([...product.ruta_categoria,product.producto].join(' › '),product.producto_id));
+      select.value = selected;
+    }
+    el('productName').value = '';
+    el('productPrice').value = '';
+  } catch(error) { el('catalogMessage').textContent = error.message; }
+  finally { button.disabled = false; }
+};
+
 el('add').onclick = addLine;
 el('lines').oninput = calculate;
 el('deposit').onchange = calculate;
@@ -396,7 +478,7 @@ el('amount').oninput = () => { manualDeposit = true; };
 el('retry').onclick = sendPending;
 el('refresh').onclick = refreshQueue;
 el('showQueue').onclick = () => { showQueue(); refreshQueue(); };
-el('showNew').onclick = () => { el('newOrder').hidden = false; el('queueSection').hidden = true; };
+el('showNew').onclick = () => { el('catalogPanel').hidden = true; el('newOrder').hidden = false; el('queueSection').hidden = true; };
 el('logout').onclick = async () => {
   const {error} = await db.auth.signOut();
   if (error) message(error.message);
