@@ -17,8 +17,8 @@ nav{display:flex;gap:10px;margin-bottom:22px}#message{white-space:pre-wrap;paddi
 small{color:#475569}.date{font-weight:bold;font-size:21px}.badge{color:#1E3A8A}fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}
 
 body:has(#queueSection:not([hidden])) main{max-width:1800px}
-#queue{display:grid;grid-template-columns:repeat(4,minmax(260px,1fr));gap:16px;overflow-x:auto;align-items:start;padding-bottom:16px}
-#queue.with-delivered{grid-template-columns:repeat(5,minmax(260px,1fr))}
+#queue{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:16px;overflow-x:auto;align-items:start;padding-bottom:16px}
+#queue.with-delivered{grid-template-columns:repeat(4,minmax(260px,1fr))}
 .stage-column{min-width:0;border-top:4px solid var(--stage-color);background:#eef2f8;border-radius:8px;padding:12px}
 .stage-column h3.stage-heading{display:flex;justify-content:space-between;align-items:center;margin:0 0 14px;font-size:18px}
 .stage-count{background:white;border-radius:20px;padding:3px 10px;font-size:14px}
@@ -44,6 +44,7 @@ input[type=checkbox]{accent-color:#2563EB}
 .stage-count{background:var(--stage-color);color:white}
 .stage-column article{border-left:4px solid var(--stage-color)}
 .brand-logo{display:block;width:260px;max-width:calc(100% - 90px);height:auto;object-fit:contain}header{gap:16px}@media(max-width:600px){.brand-logo{width:220px}header{padding:16px}}
+.priority-badge{color:#9a3412;background:#fff7ed;border:1px solid #fdba74;border-radius:6px;padding:5px 8px;font-weight:700}.stage-timer{font-variant-numeric:tabular-nums;color:#475569;font-size:14px}
 </style>
 </head>
 <body>
@@ -68,6 +69,7 @@ input[type=checkbox]{accent-color:#2563EB}
 <label><span>Cliente</span><input id="customer" autocomplete="off" required><div id="suggestions"></div></label>
 <label><span>Teléfono</span><input id="phone" type="tel" required></label>
 </div>
+<label><input id="priority" type="checkbox"> Pedido prioritario</label>
 <div id="lines"></div>
 <button type="button" id="add" class="secondary">Agregar producto</button>
 <output id="total">Total ₡0</output>
@@ -149,20 +151,11 @@ function showQueue() {
 async function refreshQueue() {
   el('queueStatus').textContent = 'Cargando…';
   try {
-    let rows;
-    let enabled = true;
-    try { rows = await rpc('seguimiento'); }
-    catch (error) {
-      if (error.code !== 'PGRST202') throw error;
-      rows = await rpc('cola');
-      enabled = false;
-      message('Para habilitar las etapas ejecutá la migración 002 en Supabase.');
-    }
+    let rows = await rpc('seguimiento_v2');
     rows = rows.filter(row => el('showDelivered').checked || row.etapa !== 'Entregado');
     el('queue').replaceChildren();
     el('queue').classList.toggle('with-delivered', el('showDelivered').checked);
     const stages = [
-      ['Ingreso', '#2563EB'],
       ['Aprobación', '#DC2626'],
       ['Producción', '#EA580C'],
       ['Completado', '#16A34A'],
@@ -196,32 +189,40 @@ async function refreshQueue() {
       const card = document.createElement('article');
       for (const [tag, text, className] of [
         ['h3',row.suborden,''],['p',row.cliente,''],['p','Entrega ' + row.fecha_entrega,'date'],
-        ['p',row.cantidad + ' × ' + row.producto,''],['p',row.etapa,'badge'],
-        ['p',money(row.subtotal),''],['small','En esta etapa desde ' + new Date(row.inicio_etapa).toLocaleString('es-CR'),'']
+        ['p',row.cantidad + ' × ' + row.producto,''],['small',row.categoria,'']
       ]) {
         const item = document.createElement(tag);
         item.textContent = text;
         item.className = className;
         card.append(item);
       }
-      if (enabled) addActions(card, row);
+      if (row.prioridad) {
+        const priority = document.createElement('p');
+        priority.className = 'priority-badge';
+        priority.textContent = '★ Prioridad';
+        card.prepend(priority);
+      }
+      const timer = document.createElement('p');
+      timer.className = 'stage-timer';
+      timer.dataset.since = row.inicio_etapa;
+      timer.title = 'Tiempo en la etapa actual (horas:minutos)';
+      card.append(timer);
+      addActions(card, row);
       columns.get(row.etapa).append(card);
     }
+    updateTimers();
     el('queueStatus').textContent = rows.length ? rows.length + ' subórdenes' : 'Sin pedidos pendientes.';
   } catch (error) {
     el('queueStatus').textContent = 'No se pudo actualizar la cola.';
-    message(error.message);
+    message(error.code === 'PGRST202' ? 'Ejecutá la migración 004 en Supabase para activar la nueva cola.' : error.message);
   }
 }
 
 function addActions(card, row) {
-  const progress = document.createElement('p');
-  progress.textContent = 'Entregadas ' + row.entregadas + ' de ' + row.cantidad;
-  card.append(progress);
   const form = document.createElement('form');
   let checkbox;
   let quantity;
-  const next = {Ingreso:'Aprobación','Aprobación':'Producción','Producción':'Completado'};
+  const next = {'Aprobación':'Producción','Producción':'Completado'};
   if (row.etapa === 'Aprobación') {
     const label = document.createElement('label');
     checkbox = document.createElement('input');
@@ -267,31 +268,36 @@ function addActions(card, row) {
     };
     card.append(form);
   }
-  const historyButton = document.createElement('button');
-  historyButton.type = 'button';
-  historyButton.className = 'secondary';
-  historyButton.textContent = 'Ver historial';
-  const history = document.createElement('div');
-  historyButton.onclick = async () => {
-    historyButton.disabled = true;
-    try {
-      const movements = await rpc('historial', {codigo:row.suborden});
-      history.replaceChildren();
-      for (const movement of movements) {
-        const details = document.createElement('details');
-        const summary = document.createElement('summary');
-        summary.textContent = new Date(movement.fecha).toLocaleString('es-CR') + ' · ' + movement.nombre + ' · ' + movement.telefono + ' · ' + movement.accion;
-        const values = document.createElement('pre');
-        values.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px';
-        values.textContent = JSON.stringify({anterior:movement.anterior,nuevo:movement.nuevo},null,2);
-        details.append(summary,values);
-        history.append(details);
-      }
-    } catch(error) { message(error.message); }
-    finally { historyButton.disabled = false; }
-  };
-  card.append(historyButton,history);
+  const previous = {'Producción':'Aprobación','Completado':'Producción','Entregado':'Completado'}[row.etapa];
+  if (previous) {
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.className = 'secondary';
+    back.textContent = '← Volver a ' + previous;
+    back.onclick = async () => {
+      const note = row.etapa === 'Entregado' ? ' Se anulará la última entrega registrada.' : '';
+      const reason = prompt('Motivo para devolver ' + row.suborden + ' a ' + previous + '.' + note);
+      if (reason === null || !reason.trim()) return;
+      back.disabled = true;
+      try {
+        await rpc('retroceder', {codigo:row.suborden,version_actual:row.version,motivo:reason.trim()});
+        message('Suborden devuelta a ' + previous);
+      } catch (error) { message(error.message); }
+      await refreshQueue();
+    };
+    card.append(back);
+  }
 }
+function updateTimers() {
+  document.querySelectorAll('.stage-timer').forEach(timer => {
+    const minutes = Math.max(0, Math.floor((Date.now() - new Date(timer.dataset.since).getTime()) / 60000));
+    timer.textContent = Number.isFinite(minutes)
+      ? '⌛ ' + String(Math.floor(minutes / 60)).padStart(2,'0') + ':' + String(minutes % 60).padStart(2,'0')
+      : '⌛ --:--';
+  });
+}
+setInterval(updateTimers, 30000);
+
 el('showDelivered').onchange = refreshQueue;
 
 function lockPending(locked) {
@@ -305,6 +311,7 @@ async function sendPending() {
   message('Guardando pedido…');
   try {
     const pending = JSON.parse(sessionStorage.getItem(pendingKey));
+    await rpc('seguimiento_v2'); // Comprueba que la migración requerida esté instalada.
     const number = await rpc('guardar_pedido', pending);
     sessionStorage.removeItem(pendingKey);
     lockPending(false);
@@ -403,6 +410,7 @@ el('order').onsubmit = event => {
     cliente_id:clientId,nombre_cliente:el('customer').value.trim(),
     telefono:el('phone').value,pedir_adelanto:el('deposit').checked,
     adelanto_acordado:el('deposit').checked ? Number(el('amount').value) : 0,
+    prioridad:el('priority').checked,
     lineas:lines
   };
   try {
